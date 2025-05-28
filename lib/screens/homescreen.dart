@@ -179,11 +179,11 @@ class _HomescreenState extends State<Homescreen> {
         title: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            const Text("🐝 Surveillance Ruches"),
+            const Text("🐝 Surveillance Ruches - ESIEA"),
             Text(_formatTime(_currentTime)),
             Row(
               children: [
-                Text("Temps $_countdown s"),
+                Text("$_countdown s"),
                 IconButton(
                   onPressed: () {
                     _generateAndSendHiveData();
