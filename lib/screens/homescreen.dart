@@ -18,14 +18,18 @@ class _HomescreenState extends State<Homescreen> {
   int _countdown = 5;
   List<Map<String, dynamic>> hiveData = [];
 
+  List<Map<String, dynamic>> hiveHistory = [];
+  DateTime appStartTime = DateTime.now();
+
   final String apiUrl = 'https://beehives-api.esiea.fr/ruches';
 
   @override
   void initState() {
     super.initState();
     _currentTime = DateTime.now();
+    appStartTime = _currentTime;
 
-    _loadHiveData();
+    _loadHiveData(); // Charger les données actuelles
 
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       setState(() {
@@ -34,7 +38,8 @@ class _HomescreenState extends State<Homescreen> {
       });
 
       if (_countdown <= 0) {
-        _generateAndSendHiveData();
+        _generateAndSendHiveData(); // Met à jour les données
+        _storeCurrentHiveData();    // Stocke les données actuelles dans l'historique
         _countdown = 5;
       }
     });
@@ -46,147 +51,10 @@ class _HomescreenState extends State<Homescreen> {
     super.dispose();
   }
 
-  Future<void> _loadHiveData() async {
-    final response = await http.get(Uri.parse(apiUrl));
-
-    if (response.statusCode == 200) {
-      final List<dynamic> data = json.decode(response.body);
-      final List<Map<String, dynamic>> loadedHives = [];
-
-      for (var hive in data) {
-        final parsedHive = {
-          "id": hive["hive_id"],
-          "temperature": hive["temperature"],
-          "in": hive["activity_in"],
-          "out": hive["activity_out"],
-          "total": hive["activity_in"] + hive["activity_out"],
-          "spectrum": [
-            hive["sound_spectrum_1"],
-            hive["sound_spectrum_2"],
-            hive["sound_spectrum_3"],
-            hive["sound_spectrum_4"]
-          ],
-        };
-
-        parsedHive["alertReasons"] = getAlertReasons(parsedHive);
-        parsedHive["alert"] = parsedHive["alertReasons"].isNotEmpty;
-        loadedHives.add(parsedHive);
-      }
-
-      setState(() {
-        hiveData = loadedHives;
-      });
-    }
-  }
-
-  Future<void> _generateAndSendHiveData() async {
-    final random = Random();
-    List<Map<String, dynamic>> newData = List.generate(3, (index) {
-      final temperature = 5 + random.nextDouble() * 40;
-      final inCount = random.nextInt(101);
-      final outCount = random.nextInt(101);
-      final total = inCount + outCount;
-      final spectrum = List.generate(4, (_) => double.parse((random.nextDouble()).toStringAsFixed(2)));
-
-      final hive = {
-        "id": "ruche_${index + 1}",
-        "temperature": temperature,
-        "in": inCount,
-        "out": outCount,
-        "total": total,
-        "spectrum": spectrum,
-      };
-
-      hive["alertReasons"] = getAlertReasons(hive);
-      hive["alert"] = (hive["alertReasons"] as List?)?.isNotEmpty ?? false;
-
-      return hive;
-    });
-
-    for (var hive in newData) {
-      await http.put(
-        Uri.parse("$apiUrl/${hive['id']}"),
-        headers: {"Content-Type": "application/json"},
-        body: json.encode({
-          "temperature": hive["temperature"],
-          "activity_in": hive["in"],
-          "activity_out": hive["out"],
-          "sound_spectrum_1": hive["spectrum"][0],
-          "sound_spectrum_2": hive["spectrum"][1],
-          "sound_spectrum_3": hive["spectrum"][2],
-          "sound_spectrum_4": hive["spectrum"][3],
-        }),
-      );
-    }
-
-    setState(() {
-      hiveData = newData;
-    });
-  }
-
-  String _formatTime(DateTime time) {
-    return "${time.day.toString().padLeft(2, '0')}/"
-        "${time.month.toString().padLeft(2, '0')}/"
-        "${time.year} "
-        "${time.hour.toString().padLeft(2, '0')}:"
-        "${time.minute.toString().padLeft(2, '0')}:"
-        "${time.second.toString().padLeft(2, '0')}";
-  }
-
-  List<String> getAlertReasons(Map<String, dynamic> hive) {
-    List<String> reasons = [];
-
-    final temperature = hive["temperature"] is num ? hive["temperature"].toDouble() : 0.0;
-    final inCount = hive["in"] ?? 0;
-    final outCount = hive["out"] ?? 0;
-    final total = hive["total"] ?? 0;
-    final spectrum = _parseSpectrum(hive["spectrum"]);
-
-    if (temperature < 10) {
-      reasons.add("Température trop basse (moins de 10°C)");
-    } else if (temperature > 40) {
-      reasons.add("Température trop élevée (plus de 40°C)");
-    }
-
-    if (total == 0) {
-      reasons.add("Aucune activité détectée");
-    } else {
-      if (outCount >= total * 0.9) {
-        reasons.add("Sortie anormale élevée");
-      }
-      if (outCount == 0 && inCount > 0) {
-        reasons.add("Entrées sans sorties détectées");
-      }
-    }
-
-    if (spectrum.isNotEmpty) {
-      final maxVal = spectrum.reduce(max);
-      final avgVal = spectrum.reduce((a, b) => a + b) / spectrum.length;
-
-      if (maxVal > 0.9) {
-        reasons.add("Pics sonores élevés détectés");
-      } else if (avgVal < 0.05) {
-        reasons.add("Spectre sonore très faible");
-      }
-    } else {
-      reasons.add("Spectre sonore manquant");
-    }
-
-    return reasons;
-  }
-
-  List<double> _parseSpectrum(dynamic spectrum) {
-    if (spectrum is List) {
-      return spectrum.map((e) => e is double ? e : double.tryParse(e.toString()) ?? 0.0).toList();
-    } else if (spectrum is String) {
-      return spectrum.split(',').map((s) => double.tryParse(s) ?? 0.0).toList();
-    }
-    return [];
-  }
-
   @override
   Widget build(BuildContext context) {
     double width = MediaQuery.of(context).size.width;
+    final xMax = hiveHistory.length.toDouble();
 
     return Scaffold(
       appBar: AppBar(
@@ -219,37 +87,68 @@ class _HomescreenState extends State<Homescreen> {
           child: Center(
             child: Padding(
               padding: const EdgeInsets.all(20),
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 600),
-                transitionBuilder: (Widget child, Animation<double> animation) {
-                  return FadeTransition(
-                    opacity: animation,
-                    child: SlideTransition(
-                      position: Tween<Offset>(
-                        begin: const Offset(0, 0.1),
-                        end: Offset.zero,
-                      ).animate(animation),
-                      child: child,
+              child: Column(
+                children: [
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 600),
+                    transitionBuilder: (Widget child, Animation<double> animation) {
+                      return FadeTransition(
+                        opacity: animation,
+                        child: SlideTransition(
+                          position: Tween<Offset>(
+                            begin: const Offset(0, 0.1),
+                            end: Offset.zero,
+                          ).animate(animation),
+                          child: child,
+                        ),
+                      );
+                    },
+                    child: Wrap(
+                      key: ValueKey<int>(hiveData.length), // clé liée à la liste pour détecter le changement
+                      runSpacing: 30,
+                      spacing: 30,
+                      children: hiveData.map((hive) {
+                        return GestureDetector(
+                          key: ValueKey(hive['id']), // clé unique par ruche
+                          onTap: () => _showHiveDialog(existingHive: hive),
+                          child: _buildHiveCard(hive, width),
+                        );
+                      }).toList(),
                     ),
-                  );
-                },
-                child: Wrap(
-                  key: ValueKey<int>(hiveData.length), // clé liée à la liste pour détecter le changement
-                  runSpacing: 30,
-                  spacing: 30,
-                  children: hiveData.map((hive) {
-                    return GestureDetector(
-                      key: ValueKey(hive['id']), // clé unique par ruche
-                      onTap: () => _showHiveDialog(existingHive: hive),
-                      child: _buildHiveCard(hive, width),
-                    );
-                  }).toList(),
-                ),
+                  ),
+                  Container(
+                    margin: EdgeInsets.symmetric(vertical: 15),
+                    child: Wrap(
+                      spacing: 20,
+                      runSpacing: 10,
+                      children: [
+                        _buildLegendItem("Ruche 1", Colors.red),
+                        _buildLegendItem("Ruche 2", Colors.blue),
+                        _buildLegendItem("Ruche 3", Colors.green),
+                      ],
+                    ),
+                  ),
+                  buildChart("Température", "temperature"),
+                  buildChart("Entrées", "in"),
+                  buildChart("Sorties", "out"),
+                  buildChart("Total", "total"),
+                ],
               ),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildLegendItem(String title, Color color) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(width: 30, height: 30, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(7))),
+        const SizedBox(width: 6),
+        Text(title, style: const TextStyle(fontSize: 14)),
+      ],
     );
   }
 
@@ -433,6 +332,241 @@ class _HomescreenState extends State<Homescreen> {
         ],
       ),
     );
+  }
+
+  Widget buildChart(String label, String keyName) {
+    List<Color> colors = [Colors.red, Colors.green, Colors.blue];
+    List<String> rucheIds = ['ruche_1', 'ruche_2', 'ruche_3'];
+
+    // 🔹 Extraire la valeur maximale de 'time'
+    double xMax = hiveHistory.map((h) => h["time"] as double).fold(0.0, (prev, curr) => curr > prev ? curr : prev);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(
+          children: [
+            Text(label, style: TextStyle(fontWeight: FontWeight.bold)),
+            SizedBox(
+              height: 200,
+              child: LineChart(
+                  LineChartData(
+                    lineBarsData: rucheIds.asMap().entries.map((entry) {
+                      int i = entry.key;
+                      String id = entry.value;
+
+                      List<FlSpot> spots = hiveHistory
+                          .where((h) => h["id"] == id)
+                          .map((h) => FlSpot(h["time"], (h[keyName] as num).toDouble()))
+                          .toList();
+
+                      return LineChartBarData(
+                        spots: spots,
+                        isCurved: true,
+                        color: colors[i],
+                        dotData: FlDotData(show: false),
+                        belowBarData: BarAreaData(show: false),
+                      );
+                    }).toList(),
+                    minX: 0,
+                    maxX: xMax,
+                    lineTouchData: LineTouchData(
+                      touchTooltipData: LineTouchTooltipData(
+                        // tooltipBgColor: Colors.white,
+                        getTooltipItems: (List<LineBarSpot> touchedSpots) {
+                          return touchedSpots.map((spot) {
+                            final color = spot.bar?.color ?? Colors.black; // Sécurité si `bar` est null
+                            return LineTooltipItem(
+                              spot.y.toStringAsFixed(1),
+                              TextStyle(color: color, fontWeight: FontWeight.bold),
+                            );
+                          }).toList();
+
+                        },
+                      ),
+                    ),
+                    titlesData: FlTitlesData(
+                      topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                      rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                      leftTitles: AxisTitles(
+                        sideTitles: SideTitles(showTitles: true, reservedSize: 32),
+                      ),
+                      bottomTitles: AxisTitles(
+                        sideTitles: SideTitles(
+                          showTitles: true,
+                          reservedSize: 28,
+                          interval: _getInterval(xMax),
+                          getTitlesWidget: (value, meta) {
+                            return Text('${value.toInt()}s', style: const TextStyle(fontSize: 10));
+                          },
+                        ),
+                      ),
+                    ),
+                  )
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  double _getInterval(double maxX) {
+    if (maxX <= 20) return 1;
+    return (maxX / 20).ceilToDouble(); // max 20 labels
+  }
+
+  void _storeCurrentHiveData() {
+    final timeSinceStart = DateTime.now().difference(appStartTime).inSeconds.toDouble();
+
+    for (var hive in hiveData) {
+      hiveHistory.add({
+        "id": hive["id"],
+        "time": timeSinceStart,
+        "temperature": hive["temperature"],
+        "in": hive["in"],
+        "out": hive["out"],
+        "total": hive["total"]
+      });
+    }
+  }
+
+  Future<void> _loadHiveData() async {
+    final response = await http.get(Uri.parse(apiUrl));
+
+    if (response.statusCode == 200) {
+      final List<dynamic> data = json.decode(response.body);
+      final List<Map<String, dynamic>> loadedHives = [];
+
+      for (var hive in data) {
+        final parsedHive = {
+          "id": hive["hive_id"],
+          "temperature": hive["temperature"],
+          "in": hive["activity_in"],
+          "out": hive["activity_out"],
+          "total": hive["activity_in"] + hive["activity_out"],
+          "spectrum": [
+            hive["sound_spectrum_1"],
+            hive["sound_spectrum_2"],
+            hive["sound_spectrum_3"],
+            hive["sound_spectrum_4"]
+          ],
+        };
+
+        parsedHive["alertReasons"] = getAlertReasons(parsedHive);
+        parsedHive["alert"] = parsedHive["alertReasons"].isNotEmpty;
+        loadedHives.add(parsedHive);
+      }
+
+      setState(() {
+        hiveData = loadedHives;
+      });
+    }
+  }
+
+  Future<void> _generateAndSendHiveData() async {
+    final random = Random();
+    List<Map<String, dynamic>> newData = List.generate(3, (index) {
+      final temperature = 5 + random.nextDouble() * 40;
+      final inCount = random.nextInt(101);
+      final outCount = random.nextInt(101);
+      final total = inCount + outCount;
+      final spectrum = List.generate(4, (_) => double.parse((random.nextDouble()).toStringAsFixed(2)));
+
+      final hive = {
+        "id": "ruche_${index + 1}",
+        "temperature": temperature,
+        "in": inCount,
+        "out": outCount,
+        "total": total,
+        "spectrum": spectrum,
+      };
+
+      hive["alertReasons"] = getAlertReasons(hive);
+      hive["alert"] = (hive["alertReasons"] as List?)?.isNotEmpty ?? false;
+
+      return hive;
+    });
+
+    for (var hive in newData) {
+      await http.put(
+        Uri.parse("$apiUrl/${hive['id']}"),
+        headers: {"Content-Type": "application/json"},
+        body: json.encode({
+          "temperature": hive["temperature"],
+          "activity_in": hive["in"],
+          "activity_out": hive["out"],
+          "sound_spectrum_1": hive["spectrum"][0],
+          "sound_spectrum_2": hive["spectrum"][1],
+          "sound_spectrum_3": hive["spectrum"][2],
+          "sound_spectrum_4": hive["spectrum"][3],
+        }),
+      );
+    }
+
+    setState(() {
+      hiveData = newData;
+    });
+  }
+
+  String _formatTime(DateTime time) {
+    return "${time.day.toString().padLeft(2, '0')}/"
+        "${time.month.toString().padLeft(2, '0')}/"
+        "${time.year} "
+        "${time.hour.toString().padLeft(2, '0')}:"
+        "${time.minute.toString().padLeft(2, '0')}:"
+        "${time.second.toString().padLeft(2, '0')}";
+  }
+
+  List<String> getAlertReasons(Map<String, dynamic> hive) {
+    List<String> reasons = [];
+
+    final temperature = hive["temperature"] is num ? hive["temperature"].toDouble() : 0.0;
+    final inCount = hive["in"] ?? 0;
+    final outCount = hive["out"] ?? 0;
+    final total = hive["total"] ?? 0;
+    final spectrum = _parseSpectrum(hive["spectrum"]);
+
+    if (temperature < 10) {
+      reasons.add("Température trop basse (moins de 10°C)");
+    } else if (temperature > 40) {
+      reasons.add("Température trop élevée (plus de 40°C)");
+    }
+
+    if (total == 0) {
+      reasons.add("Aucune activité détectée");
+    } else {
+      if (outCount >= total * 0.9) {
+        reasons.add("Sortie anormale élevée");
+      }
+      if (outCount == 0 && inCount > 0) {
+        reasons.add("Entrées sans sorties détectées");
+      }
+    }
+
+    if (spectrum.isNotEmpty) {
+      final maxVal = spectrum.reduce(max);
+      final avgVal = spectrum.reduce((a, b) => a + b) / spectrum.length;
+
+      if (maxVal > 0.9) {
+        reasons.add("Pics sonores élevés détectés");
+      } else if (avgVal < 0.05) {
+        reasons.add("Spectre sonore très faible");
+      }
+    } else {
+      reasons.add("Spectre sonore manquant");
+    }
+
+    return reasons;
+  }
+
+  List<double> _parseSpectrum(dynamic spectrum) {
+    if (spectrum is List) {
+      return spectrum.map((e) => e is double ? e : double.tryParse(e.toString()) ?? 0.0).toList();
+    } else if (spectrum is String) {
+      return spectrum.split(',').map((s) => double.tryParse(s) ?? 0.0).toList();
+    }
+    return [];
   }
 
 }
