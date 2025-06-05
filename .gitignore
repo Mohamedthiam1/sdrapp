@@ -11,6 +11,7 @@
 .svn/
 .swiftpm/
 migrate_working_dir/
+macos/Runner/GoogleService-Info.plist
 
 # IntelliJ related
 *.iml

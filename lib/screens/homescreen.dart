@@ -18,7 +18,7 @@ class _HomescreenState extends State<Homescreen> {
   int _countdown = 5;
   List<Map<String, dynamic>> hiveData = [];
 
-  final String apiUrl = 'http://localhost:8081/api/ruches';
+  final String apiUrl = 'https://beehives-api.esiea.fr/ruches';
 
   @override
   void initState() {
@@ -54,9 +54,23 @@ class _HomescreenState extends State<Homescreen> {
       final List<Map<String, dynamic>> loadedHives = [];
 
       for (var hive in data) {
-        hive["alertReasons"] = getAlertReasons(hive);
-        hive["alert"] = hive["alertReasons"].isNotEmpty;
-        loadedHives.add(Map<String, dynamic>.from(hive));
+        final parsedHive = {
+          "id": hive["hive_id"],
+          "temperature": hive["temperature"],
+          "in": hive["activity_in"],
+          "out": hive["activity_out"],
+          "total": hive["activity_in"] + hive["activity_out"],
+          "spectrum": [
+            hive["sound_spectrum_1"],
+            hive["sound_spectrum_2"],
+            hive["sound_spectrum_3"],
+            hive["sound_spectrum_4"]
+          ],
+        };
+
+        parsedHive["alertReasons"] = getAlertReasons(parsedHive);
+        parsedHive["alert"] = parsedHive["alertReasons"].isNotEmpty;
+        loadedHives.add(parsedHive);
       }
 
       setState(() {
@@ -67,25 +81,24 @@ class _HomescreenState extends State<Homescreen> {
 
   Future<void> _generateAndSendHiveData() async {
     final random = Random();
-    List<Map<String, dynamic>> newData = List.generate(4, (index) {
+    List<Map<String, dynamic>> newData = List.generate(3, (index) {
       final temperature = 5 + random.nextDouble() * 40;
       final inCount = random.nextInt(101);
       final outCount = random.nextInt(101);
-      final total = random.nextInt(201);
-      final spectrum = List.generate(5, (_) => double.parse((random.nextDouble()).toStringAsFixed(2)));
+      final total = inCount + outCount;
+      final spectrum = List.generate(4, (_) => double.parse((random.nextDouble()).toStringAsFixed(2)));
 
       final hive = {
+        "id": "ruche_${index + 1}",
         "temperature": temperature,
         "in": inCount,
         "out": outCount,
         "total": total,
         "spectrum": spectrum,
-        "id": "ruche_${index + 1}"
       };
 
-      final alertReasons = getAlertReasons(hive);
-      hive["alertReasons"] = alertReasons;
-      hive["alert"] = alertReasons.isNotEmpty;
+      hive["alertReasons"] = getAlertReasons(hive);
+      hive["alert"] = (hive["alertReasons"] as List?)?.isNotEmpty ?? false;
 
       return hive;
     });
@@ -96,10 +109,12 @@ class _HomescreenState extends State<Homescreen> {
         headers: {"Content-Type": "application/json"},
         body: json.encode({
           "temperature": hive["temperature"],
-          "in": hive["in"],
-          "out": hive["out"],
-          "total": hive["total"],
-          "spectrum": hive["spectrum"]
+          "activity_in": hive["in"],
+          "activity_out": hive["out"],
+          "sound_spectrum_1": hive["spectrum"][0],
+          "sound_spectrum_2": hive["spectrum"][1],
+          "sound_spectrum_3": hive["spectrum"][2],
+          "sound_spectrum_4": hive["spectrum"][3],
         }),
       );
     }
@@ -346,8 +361,6 @@ class _HomescreenState extends State<Homescreen> {
         text: existingHive?['in']?.toString() ?? '');
     final TextEditingController outController = TextEditingController(
         text: existingHive?['out']?.toString() ?? '');
-    final TextEditingController totalController = TextEditingController(
-        text: existingHive?['total']?.toString() ?? '');
     final TextEditingController spectrumController = TextEditingController(
         text: _parseSpectrum(existingHive?['spectrum']).join(', '));
 
@@ -362,8 +375,7 @@ class _HomescreenState extends State<Homescreen> {
               TextField(controller: tempController, decoration: const InputDecoration(labelText: "Température (°C)"), keyboardType: TextInputType.number),
               TextField(controller: inController, decoration: const InputDecoration(labelText: "Entrées"), keyboardType: TextInputType.number),
               TextField(controller: outController, decoration: const InputDecoration(labelText: "Sorties"), keyboardType: TextInputType.number),
-              TextField(controller: totalController, decoration: const InputDecoration(labelText: "Total"), keyboardType: TextInputType.number),
-              TextField(controller: spectrumController, decoration: const InputDecoration(labelText: "Spectre sonore (ex: 0.3, 0.5, 0.8)"), keyboardType: TextInputType.text),
+              TextField(controller: spectrumController, decoration: const InputDecoration(labelText: "Spectre sonore (ex: 0.3, 0.5, 0.8, 0.2)"), keyboardType: TextInputType.text),
             ],
           ),
         ),
@@ -376,23 +388,36 @@ class _HomescreenState extends State<Homescreen> {
                   .map((e) => double.tryParse(e.trim()) ?? 0.0)
                   .toList();
 
+              final inCount = int.tryParse(inController.text) ?? 0;
+              final outCount = int.tryParse(outController.text) ?? 0;
+
               final newHive = {
                 "id": idController.text,
                 "temperature": double.tryParse(tempController.text) ?? 0.0,
-                "in": int.tryParse(inController.text) ?? 0,
-                "out": int.tryParse(outController.text) ?? 0,
-                "total": int.tryParse(totalController.text) ?? 0,
+                "in": inCount,
+                "out": outCount,
+                "total": inCount + outCount,
                 "spectrum": parsedSpectrum,
-                "alert": false
+                "alert": false,
               };
 
               final hiveId = idController.text;
               final url = 'http://localhost:8081/api/ruches/$hiveId';
 
+              final spectrum = newHive["spectrum"] as List<double>? ?? [];
+
               final response = await http.put(
                 Uri.parse(url),
                 headers: {'Content-Type': 'application/json'},
-                body: json.encode(newHive),
+                body: json.encode({
+                  "temperature": newHive["temperature"],
+                  "activity_in": newHive["in"],
+                  "activity_out": newHive["out"],
+                  "sound_spectrum_1": spectrum.isNotEmpty ? spectrum[0] : 0.0,
+                  "sound_spectrum_2": spectrum.length > 1 ? spectrum[1] : 0.0,
+                  "sound_spectrum_3": spectrum.length > 2 ? spectrum[2] : 0.0,
+                  "sound_spectrum_4": spectrum.length > 3 ? spectrum[3] : 0.0,
+                }),
               );
 
               if (response.statusCode == 200 || response.statusCode == 201) {
@@ -404,9 +429,10 @@ class _HomescreenState extends State<Homescreen> {
               }
             },
             child: const Text("Valider"),
-          ),
+          )
         ],
       ),
     );
   }
+
 }

@@ -8,7 +8,7 @@ const db = getFirestore();
 
 exports.updateRuches = onSchedule(
   {
-    schedule: "every 6 hours",
+    schedule: "every 1 minutes",
     timeZone: "Europe/Paris",
   },
   async () => {
